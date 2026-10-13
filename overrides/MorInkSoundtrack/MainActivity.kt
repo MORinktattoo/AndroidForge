@@ -174,8 +174,8 @@ class MainActivity : Activity() {
   const val KEY_MODE="capture_mode";const val KEY_START="schedule_start";const val KEY_END="schedule_end"
   const val KEY_WEEKDAYS="schedule_weekdays";const val KEY_OVERRIDE="manual_override"
   const val KEY_LAT="studio_latitude";const val KEY_LON="studio_longitude";const val KEY_STUDIO="studio_name"
-  private const val BG=0xFF090909.toInt();private const val SURFACE=0xFF121212.toInt();private const val SURFACE2=0xFF1A1A1A.toInt()
-  private const val BORDER=0xFF292824.toInt();private const val GOLD=0xFFC8B78F.toInt();private const val GOLD_DARK=0xFF786B4F.toInt()
+  private const val BG=0xFF050505.toInt();private const val SURFACE=0xFF101010.toInt();private const val SURFACE2=0xFF171717.toInt()
+  private const val BORDER=0xFF24221D.toInt();private const val GOLD=0xFFC6A85C.toInt();private const val GOLD_DARK=0xFF7D6938.toInt()
   private const val IVORY=0xFFF3F0E8.toInt();private const val MUTED=0xFFAAA69D.toInt()
   fun captureAllowed(context:Context):Boolean{
    val p=context.getSharedPreferences(PREFS,Context.MODE_PRIVATE);if(p.getBoolean(KEY_OVERRIDE,false))return true
