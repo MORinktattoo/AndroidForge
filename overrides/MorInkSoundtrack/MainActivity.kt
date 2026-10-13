@@ -1,5 +1,6 @@
 package com.morink.soundtrack
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
@@ -124,6 +125,9 @@ class MainActivity : Activity() {
    val st=startTime.text.toString().trim(); val en=endTime.text.toString().trim()
    if(!validTime(st)||!validTime(en)){toast("Use 24-hour time, for example 09:00");return@primary}
    val lat=latitude.text.toString().trim(); val lon=longitude.text.toString().trim()
+   val typedAddress=address.text.toString().trim()
+   val savedAddress=prefs.getString(KEY_ADDRESS,"").orEmpty()
+   if(typedAddress.isNotBlank() && typedAddress!=savedAddress && (lat.isBlank()||lon.isBlank())) { toast("Tap FIND ADDRESS and choose a result first"); return@primary }
    val radius=radiusMeters.text.toString().trim().toIntOrNull()
    if(radius==null||radius !in 25..1000){toast("Distance must be between 25 and 1,000 metres");return@primary}
    if(lat.isNotEmpty()&&(lat.toDoubleOrNull()?.let{it !in -90.0..90.0}!=false)){toast("Latitude must be between -90 and 90");return@primary}
