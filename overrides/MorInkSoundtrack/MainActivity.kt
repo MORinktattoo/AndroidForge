@@ -49,10 +49,21 @@ class MainActivity : Activity() {
   val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(22),dp(20),dp(22),dp(32)); setBackgroundColor(BG) }
   scroll.addView(root)
   val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+  val logoSlot = FrameLayout(this).apply {
+   layoutParams = LinearLayout.LayoutParams(dp(54),dp(54)).apply { rightMargin=dp(10) }
+   background = rounded(SURFACE,10,BORDER)
+  }
+  val logoId = resources.getIdentifier("mor_ink_logo","drawable",packageName)
+  if(logoId!=0) {
+   logoSlot.addView(ImageView(this).apply { setImageResource(logoId); scaleType=ImageView.ScaleType.FIT_CENTER; contentDescription="Mor Ink Tattoo Shop logo" },
+    FrameLayout.LayoutParams(-1,-1).apply { setMargins(dp(5),dp(5),dp(5),dp(5)) })
+  } else {
+   logoSlot.addView(TextView(this).apply { text="MOR\\nINK"; gravity=Gravity.CENTER; textSize=11f; setTextColor(GOLD); typeface=Typeface.DEFAULT_BOLD; contentDescription="Mor Ink logo space" })
+  }
   val brand = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; layoutParams = LinearLayout.LayoutParams(0,-2,1f) }
   brand.addView(label("MOR INK",13,GOLD).apply { typeface=Typeface.DEFAULT_BOLD; letterSpacing=.22f })
   brand.addView(label("TATTOO SHOP",9,MUTED).apply { letterSpacing=.18f })
-  head.addView(brand); head.addView(textAction("VISIT MOR INK  >") { openWebsite() })
+  head.addView(logoSlot); head.addView(brand); head.addView(textAction("mortattoo.com  >") { openWebsite() })
   root.addView(head); root.addView(space(20))
   root.addView(label("NOW PLAYING",29,IVORY).apply { typeface=Typeface.create("sans-serif",Typeface.BOLD) })
   root.addView(label("Your studio. Its own soundtrack.",14,MUTED)); root.addView(space(20))
