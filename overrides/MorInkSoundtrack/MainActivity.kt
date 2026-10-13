@@ -128,7 +128,9 @@ class MainActivity : Activity() {
   val modeName=listOf("Always On","Scheduled","Location Only","Off")[prefs.getInt(KEY_MODE,1).coerceIn(0,3)]
   val capture=captureAllowed(this);val name=prefs.getString(KEY_STUDIO,"Mor Ink Shop").orEmpty().ifBlank{"Mor Ink Shop"}
   val coords=!prefs.getString(KEY_LAT,"").isNullOrBlank()&&!prefs.getString(KEY_LON,"").isNullOrBlank()
-  val loc=when{prefs.getInt(KEY_MODE,1)!=2->"Location not controlling capture";!coords->"Studio coordinates needed";!allowed->"Grant notification access";capture->"Within 250 m by last-known location";else->"Outside radius or location unavailable"}
+  val locationGranted=android.os.Build.VERSION.SDK_INT<23 || checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)==android.content.pm.PackageManager.PERMISSION_GRANTED || checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION)==android.content.pm.PackageManager.PERMISSION_GRANTED
+  val insideRadius=studioRadiusState()
+  val loc=when{prefs.getInt(KEY_MODE,1)!=2->"Location not controlling capture";!coords->"Studio coordinates needed";!locationGranted->"Location permission missing";!allowed->"Grant notification access";insideRadius==true->"Inside 250 m studio radius";insideRadius==false->"Outside studio radius";else->"Location unavailable"}
   status.text=when{!allowed->"Detection permission needed";capture->"$name - Capture active";else->"$name - Capture paused"}
   statusDot.setTextColor(if(allowed&&capture)GOLD else MUTED)
   ((status.parent as? LinearLayout)?.getChildAt(1) as? TextView)?.text=(if(allowed)"Notification access granted" else "Notification access missing")+" - "+modeName+"\n"+loc
@@ -138,6 +140,16 @@ class MainActivity : Activity() {
   history.removeAllViews()
   if(arr.length()==0)history.addView(panel().apply{addView(label("Your song history will appear here after the first detection.",13,MUTED))})
   else for(i in arr.length()-1 downTo maxOf(0,arr.length()-8)){val item=arr.optJSONObject(i)?:continue;val row=panel().apply{orientation=LinearLayout.VERTICAL;addView(label(item.optString("title").ifBlank{"Unknown title"},14,IVORY).apply{typeface=Typeface.DEFAULT_BOLD;maxLines=3});addView(label(item.optString("artist").ifBlank{"Artist unavailable"},12,MUTED).apply{maxLines=2});addView(label(formatTime(item.optString("playedAt")).ifBlank{"Time unavailable"},11,GOLD))};history.addView(row,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(8)})}
+ }
+ private fun studioRadiusState():Boolean?{
+  val lat=prefs.getString(KEY_LAT,"")?.toDoubleOrNull()?:return null
+  val lon=prefs.getString(KEY_LON,"")?.toDoubleOrNull()?:return null
+  return try{
+   val lm=getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+   val studioLoc=android.location.Location("studio").apply{latitude=lat;longitude=lon}
+   val current=listOf(android.location.LocationManager.NETWORK_PROVIDER,android.location.LocationManager.GPS_PROVIDER).mapNotNull{provider->try{lm.getLastKnownLocation(provider)}catch(_:SecurityException){null}}.minByOrNull{it.distanceTo(studioLoc)}?:return null
+   current.distanceTo(studioLoc)<=250f
+  }catch(_:SecurityException){null}
  }
  private fun formatTime(value:String):String{if(value.isBlank()||value=="null")return "";return try{DateTimeFormatter.ofPattern("MMM d, yyyy - h:mm a",Locale.getDefault()).withZone(ZoneId.systemDefault()).format(Instant.parse(value))}catch(_:Exception){value.take(48)}}
  private fun openWebsite(){try{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(SHOP_WEBSITE)))}catch(_:Exception){toast("Could not open the website. Try https://www.mortattoo.com/ in your browser.")}}
