@@ -36,6 +36,8 @@ class MainActivity : Activity() {
  private lateinit var latitude: EditText
  private lateinit var longitude: EditText
  private lateinit var radiusMeters: EditText
+ private lateinit var address: EditText
+ private lateinit var resolvedAddress: TextView
  private lateinit var studio: EditText
  private lateinit var endpoint: EditText
  private lateinit var secret: EditText
@@ -46,27 +48,27 @@ class MainActivity : Activity() {
   super.onCreate(savedInstanceState)
   window.statusBarColor = BG; window.navigationBarColor = BG
   val scroll = ScrollView(this).apply { isFillViewport = true; setBackgroundColor(BG) }
-  val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(22),dp(20),dp(22),dp(32)); setBackgroundColor(BG) }
+  val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(22),dp(8),dp(22),dp(32)); setBackgroundColor(BG) }
+  root.setOnApplyWindowInsetsListener { view, insets -> view.setPadding(dp(22), insets.systemWindowInsetTop + dp(8), dp(22), dp(32)); insets }
   scroll.addView(root)
   val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
   val logoSlot = FrameLayout(this).apply {
-   layoutParams = LinearLayout.LayoutParams(dp(54),dp(54)).apply { rightMargin=dp(10) }
+   layoutParams = LinearLayout.LayoutParams(dp(42),dp(42)).apply { rightMargin=dp(10) }
    background = rounded(SURFACE,10,BORDER)
+   isClickable=true; isFocusable=true; contentDescription="Change Mor Ink logo"
+   setOnClickListener { chooseLogo() }
   }
   val logoId = resources.getIdentifier("mor_ink_logo","drawable",packageName)
-  if(logoId!=0) {
-   logoSlot.addView(ImageView(this).apply { setImageResource(logoId); scaleType=ImageView.ScaleType.FIT_CENTER; contentDescription="Mor Ink Tattoo Shop logo" },
-    FrameLayout.LayoutParams(-1,-1).apply { setMargins(dp(5),dp(5),dp(5),dp(5)) })
-  } else {
-   logoSlot.addView(TextView(this).apply { text="MOR\\nINK"; gravity=Gravity.CENTER; textSize=11f; setTextColor(GOLD); typeface=Typeface.DEFAULT_BOLD; contentDescription="Mor Ink logo space" })
-  }
+  val savedLogo = prefs.getString(KEY_LOGO_URI, null)
+  if(savedLogo!=null) { try { logoSlot.addView(ImageView(this).apply { setImageURI(Uri.parse(savedLogo)); scaleType=ImageView.ScaleType.FIT_CENTER; contentDescription="Custom Mor Ink logo" }, FrameLayout.LayoutParams(-1,-1).apply { setMargins(dp(4),dp(4),dp(4),dp(4)) }) } catch(_:Exception) { addFallbackLogo(logoSlot,logoId) } }
+  else addFallbackLogo(logoSlot,logoId)
   val brand = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; layoutParams = LinearLayout.LayoutParams(0,-2,1f) }
   brand.addView(label("MOR INK",13,GOLD).apply { typeface=Typeface.DEFAULT_BOLD; letterSpacing=.22f })
   brand.addView(label("TATTOO SHOP",9,MUTED).apply { letterSpacing=.18f })
   head.addView(logoSlot); head.addView(brand); head.addView(textAction("mortattoo.com  >") { openWebsite() })
-  root.addView(head); root.addView(space(20))
-  root.addView(label("NOW PLAYING",29,IVORY).apply { typeface=Typeface.create("sans-serif",Typeface.BOLD) })
-  root.addView(label("Your studio. Its own soundtrack.",14,MUTED)); root.addView(space(20))
+  root.addView(head); root.addView(space(10))
+  root.addView(label("NOW PLAYING",25,IVORY).apply { typeface=Typeface.create("sans-serif",Typeface.BOLD) })
+  root.addView(label("Your studio. Its own soundtrack.",14,MUTED)); root.addView(space(12))
   root.addView(eyebrow("LATEST DETECTION"))
   val now=panel()
   now.addView(TextView(this).apply { text="MUSIC"; textSize=12f; gravity=Gravity.CENTER; setTextColor(GOLD); background=rounded(SURFACE2,14); layoutParams=LinearLayout.LayoutParams(dp(58),dp(58)).apply { rightMargin=dp(14) }; contentDescription="Artwork unavailable" })
@@ -103,13 +105,20 @@ class MainActivity : Activity() {
   endTime=field("End (HH:mm)",prefs.getString(KEY_END,"18:00").orEmpty())
   times.addView(startTime,LinearLayout.LayoutParams(0,dp(52),1f).apply { rightMargin=dp(8) }); times.addView(endTime,LinearLayout.LayoutParams(0,dp(52),1f)); root.addView(times)
   weekdays=check("Enable Monday-Friday (uncheck for every day)",prefs.getBoolean(KEY_WEEKDAYS,true)); root.addView(weekdays)
-  root.addView(label("Location Only checks the device's last known position when a supported music notification arrives.",12,MUTED))
-  radiusMeters=field("Capture distance from studio (metres)",prefs.getInt(KEY_RADIUS,100).toString()).apply { inputType=android.text.InputType.TYPE_CLASS_NUMBER }
+  root.addView(label("Enter your studio address and choose the matching result. Coordinates are saved automatically.",12,MUTED))
+  address=field("Studio street address",prefs.getString(KEY_ADDRESS,"").orEmpty()).apply { inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_POSTAL_ADDRESS }
+  resolvedAddress=label(prefs.getString(KEY_ADDRESS,"").orEmpty().ifBlank { "No studio address selected yet" },12,MUTED)
+  root.addView(address); root.addView(space(6))
+  val locationActions=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
+  locationActions.addView(secondary("FIND ADDRESS") { resolveAddress() },LinearLayout.LayoutParams(0,dp(46),1f).apply { rightMargin=dp(8) })
+  locationActions.addView(secondary("OPEN MAP") { openMap() },LinearLayout.LayoutParams(0,dp(46),1f))
+  root.addView(locationActions); root.addView(resolvedAddress); root.addView(space(8))
+  radiusMeters=field("Capture radius (metres)",prefs.getInt(KEY_RADIUS,100).toString()).apply { inputType=android.text.InputType.TYPE_CLASS_NUMBER }
   root.addView(radiusMeters)
-  root.addView(label("Choose 25 to 1,000 metres. Default: 100 metres.",12,MUTED))
-  latitude=field("Studio latitude",prefs.getString(KEY_LAT,"").orEmpty()).apply { inputType=android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED }
-  longitude=field("Studio longitude",prefs.getString(KEY_LON,"").orEmpty()).apply { inputType=android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED }
-  root.addView(latitude); root.addView(space(8)); root.addView(longitude)
+  root.addView(label("Choose 25 to 1,000 metres. Current saved radius is preserved.",12,MUTED))
+  latitude=field("Studio latitude (internal)",prefs.getString(KEY_LAT,"").orEmpty()).apply { visibility=View.GONE; inputType=android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED }
+  longitude=field("Studio longitude (internal)",prefs.getString(KEY_LON,"").orEmpty()).apply { visibility=View.GONE; inputType=android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED }
+  root.addView(latitude); root.addView(longitude)
   override=check("Manual override: keep capture on",prefs.getBoolean(KEY_OVERRIDE,false)); root.addView(override); root.addView(space(8))
   root.addView(primary("SAVE STUDIO AND SCHEDULE") {
    val st=startTime.text.toString().trim(); val en=endTime.text.toString().trim()
@@ -119,7 +128,7 @@ class MainActivity : Activity() {
    if(radius==null||radius !in 25..1000){toast("Distance must be between 25 and 1,000 metres");return@primary}
    if(lat.isNotEmpty()&&(lat.toDoubleOrNull()?.let{it !in -90.0..90.0}!=false)){toast("Latitude must be between -90 and 90");return@primary}
    if(lon.isNotEmpty()&&(lon.toDoubleOrNull()?.let{it !in -180.0..180.0}!=false)){toast("Longitude must be between -180 and 180");return@primary}
-   prefs.edit().putString(KEY_STUDIO,studio.text.toString().trim().ifBlank{"My Studio"}).putInt(KEY_MODE,mode.selectedItemPosition).putString(KEY_START,st).putString(KEY_END,en).putBoolean(KEY_WEEKDAYS,weekdays.isChecked).putBoolean(KEY_OVERRIDE,override.isChecked).putString(KEY_LAT,lat).putString(KEY_LON,lon).putInt(KEY_RADIUS,radius).apply()
+   prefs.edit().putString(KEY_STUDIO,studio.text.toString().trim().ifBlank{"Mor Ink Shop"}).putInt(KEY_MODE,mode.selectedItemPosition).putString(KEY_START,st).putString(KEY_END,en).putBoolean(KEY_WEEKDAYS,weekdays.isChecked).putBoolean(KEY_OVERRIDE,override.isChecked).putString(KEY_LAT,lat).putString(KEY_LON,lon).putString(KEY_ADDRESS,address.text.toString().trim()).putInt(KEY_RADIUS,radius).apply()
    if(mode.selectedItemPosition==2&&android.os.Build.VERSION.SDK_INT>=23&&checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)!=android.content.pm.PackageManager.PERMISSION_GRANTED) requestPermissions(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION,android.Manifest.permission.ACCESS_COARSE_LOCATION),214)
    refresh();toast("Studio settings saved")
   })
@@ -168,6 +177,12 @@ class MainActivity : Activity() {
    current.distanceTo(studioLoc)<=prefs.getInt(KEY_RADIUS,100).toFloat()
   }catch(_:SecurityException){null}
  }
+ private fun chooseLogo(){try{startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);type="image/*"},4101)}catch(_:Exception){toast("Could not open image picker")}}
+ override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){super.onActivityResult(requestCode,resultCode,data);if(requestCode==4101&&resultCode==RESULT_OK){val uri=data?.data?:return;try{contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)}catch(_:Exception){};prefs.edit().putString(KEY_LOGO_URI,uri.toString()).apply();recreate()}}
+ private fun addFallbackLogo(slot:FrameLayout,logoId:Int){if(logoId!=0)slot.addView(ImageView(this).apply{setImageResource(logoId);scaleType=ImageView.ScaleType.FIT_CENTER;contentDescription="Mor Ink Tattoo Shop logo"},FrameLayout.LayoutParams(-1,-1).apply{setMargins(dp(4),dp(4),dp(4),dp(4))})else slot.addView(TextView(this).apply{text="MOR\\nINK";gravity=Gravity.CENTER;textSize=10f;setTextColor(GOLD);typeface=Typeface.DEFAULT_BOLD;contentDescription="Temporary Mor Ink wordmark"})}
+ private fun resolveAddress(){val query=address.text.toString().trim();if(query.isBlank()){toast("Enter the studio street address first");return};try{val geocoder=android.location.Geocoder(this,Locale.getDefault());if(android.os.Build.VERSION.SDK_INT>=33){geocoder.getFromLocationName(query,5){results->runOnUiThread{applyAddressResults(results?:emptyList())}}}else{@Suppress("DEPRECATION") val results=geocoder.getFromLocationName(query,5);applyAddressResults(results?:emptyList())}}catch(_:Exception){toast("Address lookup unavailable. Check the address or use OPEN MAP.")}}
+ private fun applyAddressResults(results:List<android.location.Address>){if(results.isEmpty()){toast("No address results found. Add city and postal code.");return};val choices=results.map{it.getAddressLine(0)?:it.locality?:it.featureName?:"Studio address"};AlertDialog.Builder(this).setTitle("Choose studio address").setItems(choices.toTypedArray()){_,which->val selected=results[which];latitude.setText(selected.latitude.toString());longitude.setText(selected.longitude.toString());address.setText(choices[which]);resolvedAddress.text="Selected: "+choices[which];prefs.edit().putString(KEY_ADDRESS,choices[which]).putString(KEY_LAT,selected.latitude.toString()).putString(KEY_LON,selected.longitude.toString()).apply()}.setNegativeButton("Cancel",null).show()}
+ private fun openMap(){val query=address.text.toString().trim();if(query.isBlank()){toast("Enter an address first");return};try{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("geo:0,0?q="+Uri.encode(query))).apply{setPackage("com.google.android.apps.maps")})}catch(_:Exception){try{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://www.google.com/maps/search/?api=1&query="+Uri.encode(query))))}catch(_:Exception){toast("Could not open Maps")}}}
  private fun formatTime(value:String):String{if(value.isBlank()||value=="null")return "";return try{DateTimeFormatter.ofPattern("MMM d, yyyy - h:mm a",Locale.getDefault()).withZone(ZoneId.systemDefault()).format(Instant.parse(value))}catch(_:Exception){value.take(48)}}
  private fun openWebsite(){try{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(SHOP_WEBSITE)))}catch(_:Exception){toast("Could not open the website. Try https://www.mortattoo.com/ in your browser.")}}
  private fun field(h:String,v:String)=EditText(this).apply{hint=h;setText(v);setSingleLine(true);textSize=14f;setTextColor(IVORY);setHintTextColor(MUTED);setPadding(dp(13),dp(8),dp(13),dp(8));background=rounded(SURFACE2,10,BORDER);imeOptions=EditorInfo.IME_ACTION_NEXT}
@@ -190,7 +205,7 @@ class MainActivity : Activity() {
   const val KEY_LAST_SONG="last_song";const val KEY_LAST_KEY="last_key"
   const val KEY_MODE="capture_mode";const val KEY_START="schedule_start";const val KEY_END="schedule_end"
   const val KEY_WEEKDAYS="schedule_weekdays";const val KEY_OVERRIDE="manual_override"
-  const val KEY_LAT="studio_latitude";const val KEY_LON="studio_longitude";const val KEY_STUDIO="studio_name";const val KEY_RADIUS="studio_radius_meters"
+  const val KEY_LAT="studio_latitude";const val KEY_LON="studio_longitude";const val KEY_STUDIO="studio_name";const val KEY_RADIUS="studio_radius_meters";const val KEY_ADDRESS="studio_address";const val KEY_LOGO_URI="custom_logo_uri"
   private const val BG=0xFF050505.toInt();private const val SURFACE=0xFF101010.toInt();private const val SURFACE2=0xFF171717.toInt()
   private const val BORDER=0xFF24221D.toInt();private const val GOLD=0xFFC6A85C.toInt();private const val GOLD_DARK=0xFF7D6938.toInt()
   private const val IVORY=0xFFF3F0E8.toInt();private const val MUTED=0xFFAAA69D.toInt()
