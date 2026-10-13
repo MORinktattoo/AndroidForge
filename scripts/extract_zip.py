@@ -76,6 +76,17 @@ def main() -> int:
 
     project_root = extract(zip_path, dest_dir)
 
+    # Apply the maintained Mor Ink Soundtrack UI source to this exact project archive.
+    # This keeps the build using the redesigned Kotlin UI without changing other uploaded projects.
+    if zip_path.name == "MorInkSoundtrackAndroid_Source-v0.2.0.zip":
+        override_file = REPO_ROOT / "overrides" / "MorInkSoundtrack" / "MainActivity.kt"
+        target_file = project_root / "app" / "src" / "main" / "java" / "com" / "morink" / "soundtrack" / "MainActivity.kt"
+        if override_file.is_file() and target_file.is_file():
+            shutil.copy2(override_file, target_file)
+            print("Applied Mor Ink Soundtrack MainActivity UI override.")
+        else:
+            print("WARNING: Mor Ink UI override or target source was not found; using archived source.", file=sys.stderr)
+
     print(json.dumps({
         "zip_path": str(zip_path),
         "extract_root": str(project_root),
