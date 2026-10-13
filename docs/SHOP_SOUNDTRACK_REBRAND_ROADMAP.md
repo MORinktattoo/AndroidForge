@@ -1,6 +1,6 @@
 # Mor Ink Shop Soundtrack — App Rebrand & Setup Roadmap
 
-Status: planning document on the `soundtrack-branding-setup` branch. This document is not a claim that the Android source has already been modified or built.
+Status: first implementation is in `input/MorInkSoundtrackAndroid_Source-v0.2.0.zip` on `soundtrack-branding-setup`. The source has not yet been built or device-verified.
 
 ## Product goal
 
@@ -64,3 +64,10 @@ Before publishing an updated APK:
 ## Important current limitation
 
 The Android app source currently lives in ZIP archives under `input/` in the AndroidForge repository. AndroidForge is the build system, not the app's source tree. Actual UI implementation requires extracting and modifying the correct source archive, then rebuilding and testing it. A planning document alone does not implement the requested features.
+
+
+## 2026-10-12 implementation update
+
+Version 0.2.0 adds a dark Mor Ink branded setup screen, explicit notification-access guidance, Always On / Scheduled / Location Only / Off capture modes, weekday and local-time schedule controls, a manual capture override, studio name and coordinates, secure HTTPS receiver URL validation, recent-song status, event identifiers and queue deduplication, and a safe copyable AI setup prompt. Location Only uses Android's last-known location on notification events and a 250 m radius; it is not a continuous geofence and needs real-device validation.
+
+Website-side Wix receiver setup and multi-studio routing are not implemented by this Android-only source change. A successful CI build and device checks are still required before describing an APK as ready to install.
