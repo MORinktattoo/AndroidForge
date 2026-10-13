@@ -35,6 +35,7 @@ class MainActivity : Activity() {
  private lateinit var override: CheckBox
  private lateinit var latitude: EditText
  private lateinit var longitude: EditText
+ private lateinit var radiusMeters: EditText
  private lateinit var studio: EditText
  private lateinit var endpoint: EditText
  private lateinit var secret: EditText
@@ -91,7 +92,10 @@ class MainActivity : Activity() {
   endTime=field("End (HH:mm)",prefs.getString(KEY_END,"18:00").orEmpty())
   times.addView(startTime,LinearLayout.LayoutParams(0,dp(52),1f).apply { rightMargin=dp(8) }); times.addView(endTime,LinearLayout.LayoutParams(0,dp(52),1f)); root.addView(times)
   weekdays=check("Enable Monday-Friday (uncheck for every day)",prefs.getBoolean(KEY_WEEKDAYS,true)); root.addView(weekdays)
-  root.addView(label("Location Only uses saved studio coordinates and the existing 250 m radius.",12,MUTED))
+  root.addView(label("Location Only checks the device's last known position when a supported music notification arrives.",12,MUTED))
+  radiusMeters=field("Capture distance from studio (metres)",prefs.getInt(KEY_RADIUS,100).toString()).apply { inputType=android.text.InputType.TYPE_CLASS_NUMBER }
+  root.addView(radiusMeters)
+  root.addView(label("Choose 25 to 1,000 metres. Default: 100 metres.",12,MUTED))
   latitude=field("Studio latitude",prefs.getString(KEY_LAT,"").orEmpty()).apply { inputType=android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED }
   longitude=field("Studio longitude",prefs.getString(KEY_LON,"").orEmpty()).apply { inputType=android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED }
   root.addView(latitude); root.addView(space(8)); root.addView(longitude)
@@ -100,9 +104,11 @@ class MainActivity : Activity() {
    val st=startTime.text.toString().trim(); val en=endTime.text.toString().trim()
    if(!validTime(st)||!validTime(en)){toast("Use 24-hour time, for example 09:00");return@primary}
    val lat=latitude.text.toString().trim(); val lon=longitude.text.toString().trim()
+   val radius=radiusMeters.text.toString().trim().toIntOrNull()
+   if(radius==null||radius !in 25..1000){toast("Distance must be between 25 and 1,000 metres");return@primary}
    if(lat.isNotEmpty()&&(lat.toDoubleOrNull()?.let{it !in -90.0..90.0}!=false)){toast("Latitude must be between -90 and 90");return@primary}
    if(lon.isNotEmpty()&&(lon.toDoubleOrNull()?.let{it !in -180.0..180.0}!=false)){toast("Longitude must be between -180 and 180");return@primary}
-   prefs.edit().putString(KEY_STUDIO,studio.text.toString().trim().ifBlank{"My Studio"}).putInt(KEY_MODE,mode.selectedItemPosition).putString(KEY_START,st).putString(KEY_END,en).putBoolean(KEY_WEEKDAYS,weekdays.isChecked).putBoolean(KEY_OVERRIDE,override.isChecked).putString(KEY_LAT,lat).putString(KEY_LON,lon).apply()
+   prefs.edit().putString(KEY_STUDIO,studio.text.toString().trim().ifBlank{"My Studio"}).putInt(KEY_MODE,mode.selectedItemPosition).putString(KEY_START,st).putString(KEY_END,en).putBoolean(KEY_WEEKDAYS,weekdays.isChecked).putBoolean(KEY_OVERRIDE,override.isChecked).putString(KEY_LAT,lat).putString(KEY_LON,lon).putInt(KEY_RADIUS,radius).apply()
    if(mode.selectedItemPosition==2&&android.os.Build.VERSION.SDK_INT>=23&&checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)!=android.content.pm.PackageManager.PERMISSION_GRANTED) requestPermissions(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION,android.Manifest.permission.ACCESS_COARSE_LOCATION),214)
    refresh();toast("Studio settings saved")
   })
@@ -130,7 +136,7 @@ class MainActivity : Activity() {
   val coords=!prefs.getString(KEY_LAT,"").isNullOrBlank()&&!prefs.getString(KEY_LON,"").isNullOrBlank()
   val locationGranted=android.os.Build.VERSION.SDK_INT<23 || checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)==android.content.pm.PackageManager.PERMISSION_GRANTED || checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION)==android.content.pm.PackageManager.PERMISSION_GRANTED
   val insideRadius=studioRadiusState()
-  val loc=when{prefs.getInt(KEY_MODE,1)!=2->"Location not controlling capture";!coords->"Studio coordinates needed";!locationGranted->"Location permission missing";!allowed->"Grant notification access";insideRadius==true->"Inside 250 m studio radius";insideRadius==false->"Outside studio radius";else->"Location unavailable"}
+  val loc=when{prefs.getInt(KEY_MODE,1)!=2->"Location not controlling capture";!coords->"Studio coordinates needed";!locationGranted->"Location permission missing";!allowed->"Grant notification access";insideRadius==true->"Inside ${prefs.getInt(KEY_RADIUS,100)} m studio radius";insideRadius==false->"Outside ${prefs.getInt(KEY_RADIUS,100)} m studio radius";else->"Location unavailable"}
   status.text=when{!allowed->"Detection permission needed";capture->"$name - Capture active";else->"$name - Capture paused"}
   statusDot.setTextColor(if(allowed&&capture)GOLD else MUTED)
   ((status.parent as? LinearLayout)?.getChildAt(1) as? TextView)?.text=(if(allowed)"Notification access granted" else "Notification access missing")+" - "+modeName+"\n"+loc
@@ -148,7 +154,7 @@ class MainActivity : Activity() {
    val lm=getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
    val studioLoc=android.location.Location("studio").apply{latitude=lat;longitude=lon}
    val current=listOf(android.location.LocationManager.NETWORK_PROVIDER,android.location.LocationManager.GPS_PROVIDER).mapNotNull{provider->try{lm.getLastKnownLocation(provider)}catch(_:SecurityException){null}}.minByOrNull{it.distanceTo(studioLoc)}?:return null
-   current.distanceTo(studioLoc)<=250f
+   current.distanceTo(studioLoc)<=prefs.getInt(KEY_RADIUS,100).toFloat()
   }catch(_:SecurityException){null}
  }
  private fun formatTime(value:String):String{if(value.isBlank()||value=="null")return "";return try{DateTimeFormatter.ofPattern("MMM d, yyyy - h:mm a",Locale.getDefault()).withZone(ZoneId.systemDefault()).format(Instant.parse(value))}catch(_:Exception){value.take(48)}}
@@ -173,7 +179,7 @@ class MainActivity : Activity() {
   const val KEY_LAST_SONG="last_song";const val KEY_LAST_KEY="last_key"
   const val KEY_MODE="capture_mode";const val KEY_START="schedule_start";const val KEY_END="schedule_end"
   const val KEY_WEEKDAYS="schedule_weekdays";const val KEY_OVERRIDE="manual_override"
-  const val KEY_LAT="studio_latitude";const val KEY_LON="studio_longitude";const val KEY_STUDIO="studio_name"
+  const val KEY_LAT="studio_latitude";const val KEY_LON="studio_longitude";const val KEY_STUDIO="studio_name";const val KEY_RADIUS="studio_radius_meters"
   private const val BG=0xFF050505.toInt();private const val SURFACE=0xFF101010.toInt();private const val SURFACE2=0xFF171717.toInt()
   private const val BORDER=0xFF24221D.toInt();private const val GOLD=0xFFC6A85C.toInt();private const val GOLD_DARK=0xFF7D6938.toInt()
   private const val IVORY=0xFFF3F0E8.toInt();private const val MUTED=0xFFAAA69D.toInt()
@@ -189,7 +195,7 @@ class MainActivity : Activity() {
     2->{val lat=p.getString(KEY_LAT,"")?.toDoubleOrNull()?:return false;val lon=p.getString(KEY_LON,"")?.toDoubleOrNull()?:return false
      try{val lm=context.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
       val loc=listOf(android.location.LocationManager.NETWORK_PROVIDER,android.location.LocationManager.GPS_PROVIDER).mapNotNull{provider->try{lm.getLastKnownLocation(provider)}catch(_:SecurityException){null}}.minByOrNull{it.distanceTo(android.location.Location("studio").apply{latitude=lat;longitude=lon})}?:return false
-      loc.distanceTo(android.location.Location("studio").apply{latitude=lat;longitude=lon})<=250f}catch(_:SecurityException){false}}
+      loc.distanceTo(android.location.Location("studio").apply{latitude=lat;longitude=lon})<=p.getInt(KEY_RADIUS,100).toFloat()}catch(_:SecurityException){false}}
     else->false
    }
   }
