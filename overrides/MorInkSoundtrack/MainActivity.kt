@@ -13,8 +13,16 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
+import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.*
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -39,6 +47,14 @@ class MainActivity : Activity() {
  private lateinit var radiusMeters: EditText
  private lateinit var address: EditText
  private lateinit var resolvedAddress: TextView
+ private lateinit var locationMap: WebView
+ private lateinit var confirmLocationButton: Button
+ private lateinit var findAddressButton: Button
+ private var pendingAddress: String? = null
+ private var pendingLatitude: Double? = null
+ private var pendingLongitude: Double? = null
+ private var lastAddressLookupAt = 0L
+ private var mapErrorReported = false
  private lateinit var studio: EditText
  private lateinit var endpoint: EditText
  private lateinit var secret: EditText
@@ -48,9 +64,19 @@ class MainActivity : Activity() {
  override fun onCreate(savedInstanceState: Bundle?) {
   super.onCreate(savedInstanceState)
   window.statusBarColor = BG; window.navigationBarColor = BG
+  if(android.os.Build.VERSION.SDK_INT >= 30) window.setDecorFitsSystemWindows(false)
   val scroll = ScrollView(this).apply { isFillViewport = true; setBackgroundColor(BG) }
   val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(22),dp(8),dp(22),dp(32)); setBackgroundColor(BG) }
-  root.setOnApplyWindowInsetsListener { view, insets -> view.setPadding(dp(22), insets.systemWindowInsetTop + dp(8), dp(22), dp(32)); insets }
+  root.setOnApplyWindowInsetsListener { view, insets ->
+   if(android.os.Build.VERSION.SDK_INT >= 30) {
+    val safe=insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+    view.setPadding(dp(22)+safe.left, safe.top+dp(8), dp(22)+safe.right, safe.bottom+dp(32))
+   } else {
+    @Suppress("DEPRECATION")
+    view.setPadding(dp(22)+insets.systemWindowInsetLeft, maxOf(dp(8),insets.systemWindowInsetTop+dp(8)), dp(22)+insets.systemWindowInsetRight, insets.systemWindowInsetBottom+dp(32))
+   }
+   insets
+  }
   scroll.addView(root)
   val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
   val logoSlot = FrameLayout(this).apply {
@@ -106,14 +132,38 @@ class MainActivity : Activity() {
   endTime=field("End (HH:mm)",prefs.getString(KEY_END,"18:00").orEmpty())
   times.addView(startTime,LinearLayout.LayoutParams(0,dp(52),1f).apply { rightMargin=dp(8) }); times.addView(endTime,LinearLayout.LayoutParams(0,dp(52),1f)); root.addView(times)
   weekdays=check("Enable Monday-Friday (uncheck for every day)",prefs.getBoolean(KEY_WEEKDAYS,true)); root.addView(weekdays)
-  root.addView(label("Enter your studio address and choose the matching result. Coordinates are saved automatically.",12,MUTED))
-  address=field("Studio street address",prefs.getString(KEY_ADDRESS,"").orEmpty()).apply { inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_POSTAL_ADDRESS }
+  root.addView(label("Enter your studio address, find it, then confirm or move the map pin.",12,MUTED))
+  address=field("Studio address",prefs.getString(KEY_ADDRESS,"").orEmpty()).apply { inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_POSTAL_ADDRESS }
   resolvedAddress=label(prefs.getString(KEY_ADDRESS,"").orEmpty().ifBlank { "No studio address selected yet" },12,MUTED)
   root.addView(address); root.addView(space(6))
+  root.addView(label("Address lookup sends the address to OpenStreetMap Nominatim. Use a public business address only; the public service is best-effort and limited to one request per second.",11,MUTED))
+  root.addView(textAction("READ NOMINATIM USAGE AND PRIVACY POLICY") { try{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://operations.osmfoundation.org/policies/nominatim/")))}catch(_:Exception){toast("Open the Nominatim usage policy in a browser")}})
+  root.addView(label("Map data © OpenStreetMap contributors. Map tiles are loaded only while this preview is visible.",11,MUTED))
   val locationActions=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
-  locationActions.addView(secondary("FIND ADDRESS") { resolveAddress() },LinearLayout.LayoutParams(0,dp(46),1f).apply { rightMargin=dp(8) })
+  findAddressButton=secondary("FIND ADDRESS") { resolveAddress() }
+  locationActions.addView(findAddressButton,LinearLayout.LayoutParams(0,dp(46),1f).apply { rightMargin=dp(8) })
   locationActions.addView(secondary("OPEN MAP") { openMap() },LinearLayout.LayoutParams(0,dp(46),1f))
-  root.addView(locationActions); root.addView(resolvedAddress); root.addView(space(8))
+  root.addView(locationActions)
+  locationMap=WebView(this).apply {
+   setBackgroundColor(SURFACE); settings.javaScriptEnabled=true; settings.domStorageEnabled=false
+   settings.userAgentString="MorInkSoundtrack/0.2.0 (+https://www.mortattoo.com/)"
+   webViewClient=WebViewClient(); webChromeClient=WebChromeClient(); addJavascriptInterface(StudioMapBridge(),"StudioMap")
+   isVerticalScrollBarEnabled=false; isHorizontalScrollBarEnabled=false; overScrollMode=View.OVER_SCROLL_NEVER; visibility=View.GONE
+   setOnTouchListener { view,event ->
+    when(event.actionMasked){android.view.MotionEvent.ACTION_DOWN,android.view.MotionEvent.ACTION_MOVE->view.parent?.requestDisallowInterceptTouchEvent(true);android.view.MotionEvent.ACTION_UP,android.view.MotionEvent.ACTION_CANCEL->view.parent?.requestDisallowInterceptTouchEvent(false)}
+    false
+   }
+  }
+  root.addView(locationMap,LinearLayout.LayoutParams(-1,dp(210)).apply { topMargin=dp(8) })
+  confirmLocationButton=secondary("CONFIRM PIN") { confirmSelectedLocation() }.apply { visibility=View.GONE }
+  root.addView(confirmLocationButton,LinearLayout.LayoutParams(-1,dp(46)).apply { topMargin=dp(8) })
+  root.addView(resolvedAddress); root.addView(space(8))
+  val savedLat=prefs.getString(KEY_LAT,"")?.toDoubleOrNull(); val savedLon=prefs.getString(KEY_LON,"")?.toDoubleOrNull()
+  if(savedLat!=null&&savedLon!=null&&validCoordinates(savedLat,savedLon)) {
+   pendingLatitude=savedLat; pendingLongitude=savedLon; pendingAddress=prefs.getString(KEY_ADDRESS,"")?.takeIf{it.isNotBlank()}
+   locationMap.visibility=View.VISIBLE; confirmLocationButton.visibility=View.VISIBLE; renderLocationMap(savedLat,savedLon)
+   resolvedAddress.text=prefs.getString(KEY_ADDRESS,"").orEmpty().ifBlank { "Saved studio pin: %.5f, %.5f".format(Locale.US,savedLat,savedLon) }
+  }
   radiusMeters=field("Capture radius (metres)",prefs.getInt(KEY_RADIUS,100).toString()).apply { inputType=android.text.InputType.TYPE_CLASS_NUMBER }
   root.addView(radiusMeters)
   root.addView(label("Choose 25 to 1,000 metres. Current saved radius is preserved.",12,MUTED))
@@ -184,9 +234,112 @@ class MainActivity : Activity() {
  private fun chooseLogo(){try{startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);type="image/*"},4101)}catch(_:Exception){toast("Could not open image picker")}}
  override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){super.onActivityResult(requestCode,resultCode,data);if(requestCode==4101&&resultCode==RESULT_OK){val uri=data?.data?:return;try{contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)}catch(_:Exception){};prefs.edit().putString(KEY_LOGO_URI,uri.toString()).apply();recreate()}}
  private fun addFallbackLogo(slot:FrameLayout,logoId:Int){if(logoId!=0)slot.addView(ImageView(this).apply{setImageResource(logoId);scaleType=ImageView.ScaleType.FIT_CENTER;contentDescription="Mor Ink Tattoo Shop logo"},FrameLayout.LayoutParams(-1,-1).apply{setMargins(dp(4),dp(4),dp(4),dp(4))})else slot.addView(TextView(this).apply{text="MOR\\nINK";gravity=Gravity.CENTER;textSize=10f;setTextColor(GOLD);typeface=Typeface.DEFAULT_BOLD;contentDescription="Temporary Mor Ink wordmark"})}
- private fun resolveAddress(){val query=address.text.toString().trim();if(query.isBlank()){toast("Enter the studio street address first");return};try{val geocoder=android.location.Geocoder(this,Locale.getDefault());if(android.os.Build.VERSION.SDK_INT>=33){geocoder.getFromLocationName(query,5){results->runOnUiThread{applyAddressResults(results?:emptyList())}}}else{@Suppress("DEPRECATION") val results=geocoder.getFromLocationName(query,5);applyAddressResults(results?:emptyList())}}catch(_:Exception){toast("Address lookup unavailable. Check the address or use OPEN MAP.")}}
- private fun applyAddressResults(results:List<android.location.Address>){if(results.isEmpty()){toast("No address results found. Add city and postal code.");return};val choices=results.map{it.getAddressLine(0)?:it.locality?:it.featureName?:"Studio address"};AlertDialog.Builder(this).setTitle("Choose studio address").setItems(choices.toTypedArray()){_,which->val selected=results[which];latitude.setText(selected.latitude.toString());longitude.setText(selected.longitude.toString());address.setText(choices[which]);resolvedAddress.text="Selected: "+choices[which];prefs.edit().putString(KEY_ADDRESS,choices[which]).putString(KEY_LAT,selected.latitude.toString()).putString(KEY_LON,selected.longitude.toString()).apply()}.setNegativeButton("Cancel",null).show()}
- private fun openMap(){val query=address.text.toString().trim();if(query.isBlank()){toast("Enter an address first");return};try{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("geo:0,0?q="+Uri.encode(query))).apply{setPackage("com.google.android.apps.maps")})}catch(_:Exception){try{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://www.google.com/maps/search/?api=1&query="+Uri.encode(query))))}catch(_:Exception){toast("Could not open Maps")}}}
+ private data class StudioAddressResult(val label:String,val latitude:Double,val longitude:Double)
+ private fun resolveAddress(){
+  val query=address.text.toString().trim()
+  if(query.isBlank()){showLocationError("Enter the full studio address, including city and postal code.");return}
+  val cached=readCachedAddressResults(query)
+  if(cached.isNotEmpty()){resolvedAddress.text="Using the saved address lookup.";applyAddressResults(cached);return}
+  val now=android.os.SystemClock.elapsedRealtime()
+  if(now-lastAddressLookupAt<1100){showLocationError("Please wait a moment before searching again.");return}
+  lastAddressLookupAt=now; findAddressButton.isEnabled=false
+  resolvedAddress.text="Searching for address…"
+  Thread {
+   try {
+    val results=run {
+    // Nominatim is a no-key OpenStreetMap geocoder. This UI sends one request per explicit button tap.
+    val url=URL("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&q="+URLEncoder.encode(query,"UTF-8"))
+    val connection=(url.openConnection() as HttpURLConnection).apply { requestMethod="GET"; connectTimeout=10000; readTimeout=10000; setRequestProperty("User-Agent","MorInkSoundtrack/0.2.0 (https://www.mortattoo.com/)"); setRequestProperty("Accept-Language",Locale.getDefault().toLanguageTag()); setRequestProperty("Accept","application/json") }
+    try {
+     if(connection.responseCode !in 200..299) throw java.io.IOException("Geocoding service returned HTTP ${connection.responseCode}")
+     val body=connection.inputStream.bufferedReader().use{it.readText()}; val json=org.json.JSONArray(body)
+     (0 until json.length()).mapNotNull { i ->
+      val item=json.optJSONObject(i)?:return@mapNotNull null
+      val lat=item.optString("lat").toDoubleOrNull()?:return@mapNotNull null; val lon=item.optString("lon").toDoubleOrNull()?:return@mapNotNull null
+      if(!validCoordinates(lat,lon)) return@mapNotNull null
+      StudioAddressResult(item.optString("display_name").ifBlank{query},lat,lon)
+     }
+    } finally { connection.disconnect() }
+    }
+    runOnUiThread {
+     findAddressButton.isEnabled=true
+     if(results.isEmpty()) showLocationError("Address not found. Add the city and postal code, then try again.") else {cacheAddressResults(query,results);applyAddressResults(results)}
+    }
+   } catch(_:Exception) { runOnUiThread { findAddressButton.isEnabled=true; showLocationError("Address lookup failed. Check your connection and address, then try again.") } }
+  }.start()
+ }
+ private fun addressCacheKey(query:String)=query.trim().lowercase(Locale.ROOT)
+ private fun readCachedAddressResults(query:String):List<StudioAddressResult>{
+  return try {
+   val cache=org.json.JSONObject(prefs.getString(KEY_GEOCODE_CACHE,"{}")?:"{}")
+   val items=cache.optJSONArray(addressCacheKey(query))?:return emptyList()
+   (0 until items.length()).mapNotNull { i ->
+    val item=items.optJSONObject(i)?:return@mapNotNull null
+    val lat=item.optDouble("lat",Double.NaN); val lon=item.optDouble("lon",Double.NaN)
+    if(!validCoordinates(lat,lon)) null else StudioAddressResult(item.optString("label"),lat,lon)
+   }
+  }catch(_:Exception){emptyList()}
+ }
+ private fun cacheAddressResults(query:String,results:List<StudioAddressResult>){
+  try {
+   val cache=org.json.JSONObject(prefs.getString(KEY_GEOCODE_CACHE,"{}")?:"{}")
+   val items=org.json.JSONArray()
+   results.forEach { items.put(org.json.JSONObject().put("label",it.label).put("lat",it.latitude).put("lon",it.longitude)) }
+   cache.put(addressCacheKey(query),items)
+   prefs.edit().putString(KEY_GEOCODE_CACHE,cache.toString()).apply()
+  }catch(_:Exception){}
+ }
+ private fun applyAddressResults(results:List<StudioAddressResult>){
+  if(results.isEmpty()){showLocationError("Address not found. Add the city and postal code, then try again.");return}
+  val choices=results.map{it.label}
+  AlertDialog.Builder(this).setTitle("Choose studio address").setItems(choices.toTypedArray()){_,which->
+   val selected=results[which]; pendingAddress=selected.label; pendingLatitude=selected.latitude; pendingLongitude=selected.longitude
+   address.setText(selected.label); latitude.setText(selected.latitude.toString()); longitude.setText(selected.longitude.toString())
+   locationMap.visibility=View.VISIBLE; confirmLocationButton.visibility=View.VISIBLE
+   resolvedAddress.text="Move the pin if needed, then confirm: ${selected.label}"
+   renderLocationMap(selected.latitude,selected.longitude)
+  }.setNegativeButton("Cancel",null).show()
+ }
+ private fun renderLocationMap(lat:Double,lon:Double){
+  mapErrorReported=false
+  val html="""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><style>html,body,#map{height:100%;margin:0;background:#101010}.leaflet-control-attribution{font-size:10px}</style><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" onerror="StudioMap.onMapUnavailable()"></script></head><body><div id="map"></div><script>
+   const map=L.map('map').setView([__LAT__,__LON__],17); const tiles=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map); tiles.on('tileerror',()=>StudioMap.onMapUnavailable());
+   const pin=L.marker([__LAT__,__LON__],{draggable:true}).addTo(map); function changed(){const p=pin.getLatLng();StudioMap.onPinMoved(p.lat,p.lng)}
+   pin.on('dragend',changed); map.on('click',e=>{pin.setLatLng(e.latlng);changed()}); map.whenReady(()=>setTimeout(()=>map.invalidateSize(),150));
+   </script></body></html>""".trimIndent().replace("__LAT__",lat.toString()).replace("__LON__",lon.toString())
+  locationMap.loadDataWithBaseURL("https://www.mortattoo.com/",html,"text/html","UTF-8",null)
+ }
+ private inner class StudioMapBridge {
+  @JavascriptInterface fun onMapUnavailable(){runOnUiThread{
+   if(!mapErrorReported){mapErrorReported=true;resolvedAddress.text="Map preview unavailable. Check your internet connection; the saved pin is unchanged."}
+  }}
+  @JavascriptInterface fun onPinMoved(lat:Double,lon:Double){runOnUiThread{
+   if(!validCoordinates(lat,lon)) return@runOnUiThread
+   pendingLatitude=lat; pendingLongitude=lon; latitude.setText(lat.toString()); longitude.setText(lon.toString())
+   val label=pendingAddress?:prefs.getString(KEY_ADDRESS,"").orEmpty()
+   resolvedAddress.text=if(label.isBlank())"Pin: %.5f, %.5f — confirm to save".format(Locale.US,lat,lon) else "Pin moved for $label — confirm to save"
+   confirmLocationButton.visibility=View.VISIBLE
+  }}
+ }
+ private fun confirmSelectedLocation(){
+  val lat=pendingLatitude; val lon=pendingLongitude
+  if(lat==null||lon==null||!validCoordinates(lat,lon)){showLocationError("Find an address or choose a valid map pin first.");return}
+  val typed=address.text.toString().trim(); val existing=prefs.getString(KEY_ADDRESS,"").orEmpty()
+  if(typed.isNotBlank()&&typed!=pendingAddress&&typed!=existing){showLocationError("Tap FIND ADDRESS and choose a matching result before confirming.");return}
+  val selectedAddress=if(typed.isNotBlank())typed else existing
+  prefs.edit().putString(KEY_ADDRESS,selectedAddress).putString(KEY_LAT,lat.toString()).putString(KEY_LON,lon.toString()).apply()
+  address.setText(selectedAddress); latitude.setText(lat.toString()); longitude.setText(lon.toString()); pendingAddress=selectedAddress.takeIf{it.isNotBlank()}
+  resolvedAddress.text=if(selectedAddress.isBlank())"Studio pin saved: %.5f, %.5f".format(Locale.US,lat,lon) else "Studio location saved: $selectedAddress"
+  toast("Studio location saved"); refresh()
+ }
+ private fun validCoordinates(lat:Double,lon:Double)=lat.isFinite()&&lon.isFinite()&&lat in -90.0..90.0&&lon in -180.0..180.0
+ private fun showLocationError(message:String){resolvedAddress.text=message;toast(message)}
+ private fun openMap(){
+  val lat=prefs.getString(KEY_LAT,"")?.toDoubleOrNull(); val lon=prefs.getString(KEY_LON,"")?.toDoubleOrNull()
+  if(lat==null||lon==null||!validCoordinates(lat,lon)){showLocationError("Find and confirm a studio location before opening the map.");return}
+  val uri=Uri.parse("geo:$lat,$lon?q=$lat,$lon("+Uri.encode(address.text.toString().trim().ifBlank{"Mor Ink Studio"})+")")
+  try{startActivity(Intent(Intent.ACTION_VIEW,uri).apply{setPackage("com.google.android.apps.maps")})}catch(_:Exception){try{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://www.google.com/maps/search/?api=1&query=$lat,$lon")))}catch(_:Exception){showLocationError("Could not open Google Maps on this device.")}}
+ }
  private fun formatTime(value:String):String{if(value.isBlank()||value=="null")return "";return try{DateTimeFormatter.ofPattern("MMM d, yyyy - h:mm a",Locale.getDefault()).withZone(ZoneId.systemDefault()).format(Instant.parse(value))}catch(_:Exception){value.take(48)}}
  private fun openWebsite(){try{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(SHOP_WEBSITE)))}catch(_:Exception){toast("Could not open the website. Try https://www.mortattoo.com/ in your browser.")}}
  private fun field(h:String,v:String)=EditText(this).apply{hint=h;setText(v);setSingleLine(true);textSize=14f;setTextColor(IVORY);setHintTextColor(MUTED);setPadding(dp(13),dp(8),dp(13),dp(8));background=rounded(SURFACE2,10,BORDER);imeOptions=EditorInfo.IME_ACTION_NEXT}
@@ -210,6 +363,7 @@ class MainActivity : Activity() {
   const val KEY_MODE="capture_mode";const val KEY_START="schedule_start";const val KEY_END="schedule_end"
   const val KEY_WEEKDAYS="schedule_weekdays";const val KEY_OVERRIDE="manual_override"
   const val KEY_LAT="studio_latitude";const val KEY_LON="studio_longitude";const val KEY_STUDIO="studio_name";const val KEY_RADIUS="studio_radius_meters";const val KEY_ADDRESS="studio_address";const val KEY_LOGO_URI="custom_logo_uri"
+  private const val KEY_GEOCODE_CACHE="studio_geocode_cache"
   private const val BG=0xFF050505.toInt();private const val SURFACE=0xFF101010.toInt();private const val SURFACE2=0xFF171717.toInt()
   private const val BORDER=0xFF24221D.toInt();private const val GOLD=0xFFC6A85C.toInt();private const val GOLD_DARK=0xFF7D6938.toInt()
   private const val IVORY=0xFFF3F0E8.toInt();private const val MUTED=0xFFAAA69D.toInt()
