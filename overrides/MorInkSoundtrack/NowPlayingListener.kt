@@ -36,9 +36,12 @@ class NowPlayingListener : NotificationListenerService() {
         val combined = listOf(title, titleBig, text, bigText, subText, infoText)
             .filter { it.isNotBlank() }.joinToString(" — ")
 
-        // Do not accept arbitrary notifications just because their text says "Now playing".
-        val looksLikeMusic = packageName == "com.google.intelligence.sense" ||
-            packageName == "com.google.android.as" || packageName.contains("ambient") ||
+        // Accept Shazam's song-identification notifications as well as Pixel Now Playing.
+        val isShazam = packageName == "com.shazam.android" || packageName.contains("shazam")
+        val looksLikeMusic = isShazam ||
+            packageName == "com.google.intelligence.sense" ||
+            packageName == "com.google.android.as" ||
+            packageName.contains("ambient") ||
             packageName.contains("music") ||
             (packageName.contains("google") &&
                 (combined.contains("now playing", true) || combined.contains("identified", true)))
@@ -65,7 +68,7 @@ class NowPlayingListener : NotificationListenerService() {
         val payload = JSONObject().put("title", pair.first).put("artist", pair.second)
             .put("playedAt", playedAt).put("eventId", "${sbn.postTime}-${key.hashCode()}")
             .put("studio", prefs.getString(MainActivity.KEY_STUDIO, "Mor Ink Shop"))
-            .put("source", "pixel-notification-listener")
+            .put("source", if (isShazam) "shazam-notification-listener" else "pixel-notification-listener")
         synchronized(this) {
             val h = try { org.json.JSONArray(prefs.getString(MainActivity.KEY_HISTORY, "[]") ?: "[]") }
                 catch (_: Exception) { org.json.JSONArray() }
