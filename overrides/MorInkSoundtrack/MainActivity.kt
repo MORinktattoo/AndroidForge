@@ -59,6 +59,11 @@ class MainActivity : Activity() {
  private lateinit var endpoint: EditText
  private lateinit var secret: EditText
  private lateinit var statusDot: TextView
+ private lateinit var playLatestButton: Button
+ private lateinit var inlinePlayer: WebView
+ private lateinit var playerHint: TextView
+ private var displayedTrackKey = ""
+ private var youtubePickerDialog: AlertDialog? = null
  private val prefs by lazy { getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
 
  override fun onCreate(savedInstanceState: Bundle?) {
@@ -104,7 +109,21 @@ class MainActivity : Activity() {
   songTitle=label("No song detected yet",18,IVORY).apply { typeface=Typeface.DEFAULT_BOLD; maxLines=3 }
   songArtist=label("Your latest identification will appear here.",13,MUTED).apply { maxLines=3 }
   songTime=label("Waiting for a supported music notification",11,MUTED)
-  song.addView(songBadge); song.addView(space(5)); song.addView(songTitle); song.addView(songArtist); song.addView(space(4)); song.addView(songTime); now.addView(song); root.addView(now); root.addView(secondary("OPEN LATEST IN YOUTUBE MUSIC") { openLatestSong() },LinearLayout.LayoutParams(-1,dp(46))); root.addView(space(20))
+  song.addView(songBadge); song.addView(space(5)); song.addView(songTitle); song.addView(songArtist); song.addView(space(4)); song.addView(songTime); now.addView(song); root.addView(now)
+  inlinePlayer=WebView(this).apply {
+   setBackgroundColor(0xFF000000.toInt())
+   settings.javaScriptEnabled=true;settings.domStorageEnabled=true
+   settings.mediaPlaybackRequiresUserGesture=true
+   android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this,true)
+   webChromeClient=WebChromeClient();webViewClient=WebViewClient()
+   isVerticalScrollBarEnabled=false;isHorizontalScrollBarEnabled=false
+   visibility=View.GONE
+  }
+  root.addView(inlinePlayer,LinearLayout.LayoutParams(-1,dp(220)).apply { topMargin=dp(8) })
+  playerHint=label("Choose the matching YouTube video once. Its player will stay here for this song.",11,MUTED).apply { visibility=View.GONE }
+  root.addView(playerHint)
+  playLatestButton=secondary("FIND VIDEO TO PLAY") { openLatestSong() }.apply { isEnabled=false }
+  root.addView(playLatestButton,LinearLayout.LayoutParams(-1,dp(46)).apply { topMargin=dp(8) });root.addView(space(20))
   
   root.addView(eyebrow("STUDIO STATUS"))
   val stat=panel(); statusDot=label("*",15,GOLD)
@@ -215,13 +234,78 @@ class MainActivity : Activity() {
   statusDot.setTextColor(if(allowed&&capture)GOLD else MUTED)
   ((status.parent as? LinearLayout)?.getChildAt(1) as? TextView)?.text=(if(allowed)"Notification access granted" else "Notification access missing")+" - "+modeName+"\n"+loc
   val arr=try{org.json.JSONArray(prefs.getString(KEY_HISTORY,"[]")?:"[]")}catch(_:Exception){org.json.JSONArray()}
-  if(arr.length()==0){songBadge.text="AWAITING FIRST DETECTION";songTitle.text="No song detected yet";songArtist.text="A supported music-identification notification will appear here.";songTime.text=if(allowed)"Capture follows saved settings" else "Grant notification access to get started"}
-  else{val item=arr.optJSONObject(arr.length()-1);songBadge.text="MOST RECENTLY DETECTED";songTitle.text=item?.optString("title").orEmpty().ifBlank{"Unknown title"};songArtist.text=item?.optString("artist").orEmpty().ifBlank{"Artist unavailable"};val stamp=formatTime(item?.optString("playedAt").orEmpty());songTime.text=if(stamp.isBlank())"Detection time unavailable" else "Detected "+stamp}
+  playLatestButton.isEnabled=arr.length()>0
+  if(arr.length()==0){displayedTrackKey="";inlinePlayer.stopLoading();inlinePlayer.loadUrl("about:blank");inlinePlayer.visibility=View.GONE;playerHint.visibility=View.GONE;playLatestButton.text="FIND VIDEO TO PLAY";songBadge.text="AWAITING FIRST DETECTION";songTitle.text="No song detected yet";songArtist.text="A supported music-identification notification will appear here.";songTime.text=if(allowed)"Capture follows saved settings" else "Grant notification access to get started"}
+  else{val item=arr.optJSONObject(arr.length()-1);val title=item?.optString("title").orEmpty().ifBlank{"Unknown title"};val artist=item?.optString("artist").orEmpty().ifBlank{"Artist unavailable"};songBadge.text="MOST RECENTLY DETECTED";songTitle.text=title;songArtist.text=artist;val stamp=formatTime(item?.optString("playedAt").orEmpty());songTime.text=if(stamp.isBlank())"Detection time unavailable" else "Detected "+stamp
+   val key=trackKey(title,artist);val videoId=youtubeMatches().optString(key,"")
+   playLatestButton.text=if(videoId.isBlank())"FIND VIDEO TO PLAY" else "CHANGE VIDEO MATCH"
+   if(key!=displayedTrackKey){displayedTrackKey=key;if(videoId.isBlank()){inlinePlayer.stopLoading();inlinePlayer.loadUrl("about:blank");inlinePlayer.visibility=View.GONE;playerHint.visibility=View.GONE}else showInlinePlayer(videoId)}
+  }
   history.removeAllViews()
   if(arr.length()==0)history.addView(panel().apply{addView(label("Your song history will appear here after the first detection.",13,MUTED))})
   else for(i in arr.length()-1 downTo maxOf(0,arr.length()-8)){val item=arr.optJSONObject(i)?:continue;val row=panel().apply{orientation=LinearLayout.VERTICAL;addView(label(item.optString("title").ifBlank{"Unknown title"},14,IVORY).apply{typeface=Typeface.DEFAULT_BOLD;maxLines=3});addView(label(item.optString("artist").ifBlank{"Artist unavailable"},12,MUTED).apply{maxLines=2});addView(label(formatTime(item.optString("playedAt")).ifBlank{"Time unavailable"},11,GOLD))};history.addView(row,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(8)})}
  }
- private fun openLatestSong(){val arr=try{org.json.JSONArray(prefs.getString(KEY_HISTORY,"[]")?:"[]")}catch(_:Exception){org.json.JSONArray()};val item=arr.optJSONObject(arr.length()-1);val title=item?.optString("title").orEmpty();val artist=item?.optString("artist").orEmpty();if(title.isBlank()){toast("No song yet. Grant music detection access and wait for a track.");return};val query=listOf(title,artist).filter{it.isNotBlank()}.joinToString(" ");val uri=Uri.parse("https://music.youtube.com/search?q="+URLEncoder.encode(query,"UTF-8"));try{startActivity(Intent(Intent.ACTION_VIEW,uri))}catch(_:Exception){toast("Could not open YouTube Music. Install it or use music.youtube.com.")}};private fun studioRadiusState():Boolean?{
+ private fun openLatestSong(){
+  val arr=try{org.json.JSONArray(prefs.getString(KEY_HISTORY,"[]")?:"[]")}catch(_:Exception){org.json.JSONArray()}
+  val item=arr.optJSONObject(arr.length()-1)
+  val title=item?.optString("title").orEmpty();val artist=item?.optString("artist").orEmpty()
+  if(title.isBlank()){toast("No song yet. Grant music detection access and wait for a track.");return}
+  openYouTubeVideoPicker(title,artist)
+ }
+ private fun openYouTubeVideoPicker(title:String,artist:String){
+  val query=listOf(title,artist).filter{it.isNotBlank()}.joinToString(" ")
+  val picker=WebView(this).apply{
+   settings.javaScriptEnabled=true;settings.domStorageEnabled=true
+   android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this,true)
+   webChromeClient=WebChromeClient()
+   webViewClient=object:WebViewClient(){
+    override fun shouldOverrideUrlLoading(view:WebView,request:android.webkit.WebResourceRequest):Boolean {
+     val id=extractYouTubeVideoId(request.url)
+     if(id!=null){saveYouTubeMatch(title,artist,id);return true}
+     return false
+    }
+    override fun shouldOverrideUrlLoading(view:WebView,url:String):Boolean {
+     val id=extractYouTubeVideoId(Uri.parse(url))
+     if(id!=null){saveYouTubeMatch(title,artist,id);return true}
+     return false
+    }
+    override fun doUpdateVisitedHistory(view:WebView,url:String,isReload:Boolean){
+     super.doUpdateVisitedHistory(view,url,isReload)
+     val id=extractYouTubeVideoId(Uri.parse(url))
+     if(id!=null)saveYouTubeMatch(title,artist,id)
+    }
+   }
+  }
+  val dialog=AlertDialog.Builder(this).setTitle("Choose the matching video").setView(picker).setNegativeButton("Cancel",null).create()
+  youtubePickerDialog=dialog
+  dialog.setOnDismissListener{picker.stopLoading();picker.destroy()}
+  dialog.show();dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT,dp(680))
+  picker.loadUrl("https://www.youtube.com/results?search_query="+URLEncoder.encode(query,"UTF-8"))
+ }
+ private fun saveYouTubeMatch(title:String,artist:String,videoId:String){
+  prefs.edit().putString(KEY_YOUTUBE_MATCHES,youtubeMatches().put(trackKey(title,artist),videoId).toString()).apply()
+  displayedTrackKey=trackKey(title,artist);showInlinePlayer(videoId)
+  runOnUiThread{playLatestButton.text="CHANGE VIDEO MATCH";youtubePickerDialog?.dismiss();youtubePickerDialog=null}
+ }
+ private fun showInlinePlayer(videoId:String){
+  if(!videoId.matches(Regex("[A-Za-z0-9_-]{11}")))return
+  val html="""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><style>html,body,iframe{margin:0;width:100%;height:100%;border:0;background:#000}</style></head><body><iframe src="https://www.youtube.com/embed/$videoId?playsinline=1&controls=1&autoplay=0&rel=0" title="YouTube player" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></body></html>"""
+  inlinePlayer.visibility=View.VISIBLE;playerHint.visibility=View.VISIBLE
+  inlinePlayer.loadDataWithBaseURL("https://www.youtube.com",html,"text/html","UTF-8",null)
+ }
+ private fun extractYouTubeVideoId(uri:Uri):String?{
+  val host=uri.host?.lowercase(Locale.ROOT).orEmpty();val path=uri.path.orEmpty()
+  val id=when{
+   host=="youtu.be"->path.trim('/').substringBefore('/')
+   host.endsWith("youtube.com")&&path=="/watch"->uri.getQueryParameter("v")
+   host.endsWith("youtube.com")&&(path.startsWith("/shorts/")||path.startsWith("/live/")||path.startsWith("/embed/"))->path.trim('/').split('/').getOrNull(1)
+   else->null
+  }
+  return id?.takeIf{it.matches(Regex("[A-Za-z0-9_-]{11}"))}
+ }
+ private fun youtubeMatches()=try{org.json.JSONObject(prefs.getString(KEY_YOUTUBE_MATCHES,"{}")?:"{}")}catch(_:Exception){org.json.JSONObject()}
+ private fun trackKey(title:String,artist:String)="${title.trim().lowercase(Locale.ROOT)}|${artist.trim().lowercase(Locale.ROOT)}"
+ private fun studioRadiusState():Boolean?{
   val lat=prefs.getString(KEY_LAT,"")?.toDoubleOrNull()?:return null
   val lon=prefs.getString(KEY_LON,"")?.toDoubleOrNull()?:return null
   return try{
@@ -358,7 +442,7 @@ class MainActivity : Activity() {
  companion object{
   private const val SHOP_WEBSITE="https://www.mortattoo.com/"
   const val PREFS="mor_ink_soundtrack"
-  const val KEY_HISTORY="song_history";const val KEY_ENDPOINT="endpoint";const val KEY_SECRET="secret"
+  const val KEY_HISTORY="song_history";const val KEY_ENDPOINT="endpoint";const val KEY_SECRET="secret";const val KEY_YOUTUBE_MATCHES="youtube_video_matches"
   const val KEY_LAST_SONG="last_song";const val KEY_LAST_KEY="last_key"
   const val KEY_MODE="capture_mode";const val KEY_START="schedule_start";const val KEY_END="schedule_end"
   const val KEY_WEEKDAYS="schedule_weekdays";const val KEY_OVERRIDE="manual_override"
