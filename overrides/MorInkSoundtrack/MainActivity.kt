@@ -104,8 +104,8 @@ class MainActivity : Activity() {
   songTitle=label("No song detected yet",18,IVORY).apply { typeface=Typeface.DEFAULT_BOLD; maxLines=3 }
   songArtist=label("Your latest identification will appear here.",13,MUTED).apply { maxLines=3 }
   songTime=label("Waiting for a supported music notification",11,MUTED)
-  song.addView(songBadge); song.addView(space(5)); song.addView(songTitle); song.addView(songArtist); song.addView(space(4)); song.addView(songTime)
-  now.addView(song); root.addView(now); root.addView(space(20))
+  song.addView(songBadge); song.addView(space(5)); song.addView(songTitle); song.addView(songArtist); song.addView(space(4)); song.addView(songTime); now.addView(song); root.addView(now); root.addView(secondary("OPEN LATEST IN YOUTUBE MUSIC") { openLatestSong() },LinearLayout.LayoutParams(-1,dp(46))); root.addView(space(20))
+  
   root.addView(eyebrow("STUDIO STATUS"))
   val stat=panel(); statusDot=label("*",15,GOLD)
   val statCol=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; layoutParams=LinearLayout.LayoutParams(0,-2,1f) }
@@ -221,7 +221,7 @@ class MainActivity : Activity() {
   if(arr.length()==0)history.addView(panel().apply{addView(label("Your song history will appear here after the first detection.",13,MUTED))})
   else for(i in arr.length()-1 downTo maxOf(0,arr.length()-8)){val item=arr.optJSONObject(i)?:continue;val row=panel().apply{orientation=LinearLayout.VERTICAL;addView(label(item.optString("title").ifBlank{"Unknown title"},14,IVORY).apply{typeface=Typeface.DEFAULT_BOLD;maxLines=3});addView(label(item.optString("artist").ifBlank{"Artist unavailable"},12,MUTED).apply{maxLines=2});addView(label(formatTime(item.optString("playedAt")).ifBlank{"Time unavailable"},11,GOLD))};history.addView(row,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(8)})}
  }
- private fun studioRadiusState():Boolean?{
+ private fun openLatestSong(){val arr=try{org.json.JSONArray(prefs.getString(KEY_HISTORY,"[]")?:"[]")}catch(_:Exception){org.json.JSONArray()};val item=arr.optJSONObject(arr.length()-1);val title=item?.optString("title").orEmpty();val artist=item?.optString("artist").orEmpty();if(title.isBlank()){toast("No song yet. Grant music detection access and wait for a track.");return};val query=listOf(title,artist).filter{it.isNotBlank()}.joinToString(" ");val uri=Uri.parse("https://music.youtube.com/search?q="+URLEncoder.encode(query,"UTF-8"));try{startActivity(Intent(Intent.ACTION_VIEW,uri))}catch(_:Exception){toast("Could not open YouTube Music. Install it or use music.youtube.com.")}};private fun studioRadiusState():Boolean?{
   val lat=prefs.getString(KEY_LAT,"")?.toDoubleOrNull()?:return null
   val lon=prefs.getString(KEY_LON,"")?.toDoubleOrNull()?:return null
   return try{
