@@ -36,8 +36,12 @@ class NowPlayingListener : NotificationListenerService() {
         val combined = listOf(title, titleBig, text, bigText, subText, infoText)
             .filter { it.isNotBlank() }.joinToString(" — ")
 
-        // Accept Shazam's song-identification notifications as well as Pixel Now Playing.
+        // Shazam also posts control/status notifications; they are not identified songs.
+        // Reject them before consulting media-session metadata or parsing title/text pairs.
         val isShazam = packageName == "com.shazam.android" || packageName.contains("shazam")
+        if (isShazam && isShazamStatusNotification(title, titleBig, text, bigText, subText, infoText)) return
+
+        // Accept Shazam's song-identification notifications as well as Pixel Now Playing.
         val looksLikeMusic = isShazam ||
             packageName == "com.google.intelligence.sense" ||
             packageName == "com.google.android.as" ||
@@ -78,6 +82,26 @@ class NowPlayingListener : NotificationListenerService() {
             prefs.edit().putString(MainActivity.KEY_HISTORY, trimmed.toString()).apply()
         }
         executor.execute { sendOrQueue(payload) }
+    }
+
+    private fun isShazamStatusNotification(vararg rawFields: String): Boolean {
+        val fields = rawFields.map { it.trim().lowercase(Locale.ROOT) }
+            .filter { it.isNotBlank() }
+            .map { it.replace(Regex("[.…]+$"), "").trim() }
+        val statusPhrases = setOf(
+            "tap to shazam",
+            "auto shazam is on",
+            "identify music while using any app",
+            "identify music around you",
+            "shazam",
+            "listening for music",
+            "listening for songs"
+        )
+        if (fields.any { it in statusPhrases }) return true
+        // Shazam's ongoing Auto Shazam notification can include a count rather than a track.
+        if (fields.any { Regex("^\\d+ songs? found$").matches(it) }) return true
+        if (fields.any { it.startsWith("identify music ") || it.startsWith("auto shazam is ") }) return true
+        return false
     }
 
     private fun mediaSessionSong(extras: android.os.Bundle): Pair<String, String>? {
